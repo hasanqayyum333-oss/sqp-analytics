@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
       matchType,    // e.g. 'exact' | null
       campaignName, // campaign name string | null
       term,         // search term (MTA 2.0 rows) | null
+      includeSqp,   // boolean — also fetch SQP per-period data
     } = await req.json();
 
     const isMonthly = mode === 'monthly';
@@ -81,9 +82,68 @@ export async function POST(req: NextRequest) {
     if (campaignName) q = q.eq('campaign_name', campaignName);
     if (term)         q = q.ilike('customer_search_term', term.toLowerCase().trim());
 
-    const { data: rows, error } = await q;
+    // ── SQP per-period (only when includeSqp + term provided) ────────────────
+    type SqpAgg = {
+      sv: number;
+      mktImpr: number; ourImpr: number;
+      mktClk:  number; ourClk:  number;
+      mktCart: number; ourCart: number;
+      mktPurch:number; ourPurch:number;
+      mktRev:  number; ourRev:  number;
+      termSeen: boolean;
+    };
+    let sqpByDate: Map<string, SqpAgg> | null = null;
+
+    // Build SQP promise (resolves to sqpRows or null) in parallel with ads query
+    const sqpPromise: Promise<Record<string, unknown>[] | null> = (async () => {
+      if (!includeSqp || !term) return null;
+      const sqpTable = isMonthly ? 'sqp_monthly'     : 'sqp_weekly';
+      const sqpDate  = isMonthly ? 'month_start_date' : 'week_start_date';
+      let aQ = supabase.from('product_mapping').select('child_asin');
+      if (familyFilter)     aQ = aQ.in('family_name', familyFilter);
+      else if (brandFilter) aQ = aQ.in('brand_name',  brandFilter);
+      const { data: asnData } = await aQ;
+      const relevantAsins = ((asnData ?? []) as { child_asin: string }[]).map(r => r.child_asin);
+      if (!relevantAsins.length) return null;
+      const sqpCols = [sqpDate,'search_volume','impressions_total','impressions_asin','clicks_total','clicks_asin','cart_adds_total','cart_adds_asin','purchases_total','purchases_asin','purchases_price_median','purchases_asin_price_median'].join(',');
+      const { data: sqpRows } = await supabase.from(sqpTable).select(sqpCols)
+        .in('child_asin', relevantAsins)
+        .eq('search_term', term.toLowerCase().trim())
+        .gte(sqpDate, startDate).lte(sqpDate, endDate);
+      return (sqpRows as Record<string, unknown>[] | null) ?? null;
+    })();
+
+    const [{ data: rows, error }, sqpRawRows] = await Promise.all([q, sqpPromise]);
     if (error) throw error;
     if (!rows?.length) return NextResponse.json({ data: [] });
+
+    // Process SQP raw rows into per-date map
+    if (sqpRawRows?.length) {
+      const sqpDate = isMonthly ? 'month_start_date' : 'week_start_date';
+      sqpByDate = new Map<string, SqpAgg>();
+      for (const r of sqpRawRows) {
+        const dk = String(r[sqpDate] ?? '');
+        if (!dk) continue;
+        if (!sqpByDate.has(dk)) {
+          sqpByDate.set(dk, { sv:0, mktImpr:0, ourImpr:0, mktClk:0, ourClk:0, mktCart:0, ourCart:0, mktPurch:0, ourPurch:0, mktRev:0, ourRev:0, termSeen:false });
+        }
+        const p = sqpByDate.get(dk)!;
+        if (!p.termSeen) {
+          p.termSeen = true;
+          p.sv       = Number(r.search_volume) || 0;
+          p.mktImpr  = Number(r.impressions_total) || 0;
+          p.mktClk   = Number(r.clicks_total)      || 0;
+          p.mktCart  = Number(r.cart_adds_total)   || 0;
+          p.mktPurch = Number(r.purchases_total)   || 0;
+          p.mktRev   = (Number(r.purchases_price_median) || 0) * (Number(r.purchases_total) || 0);
+        }
+        p.ourImpr  += Number(r.impressions_asin) || 0;
+        p.ourClk   += Number(r.clicks_asin)      || 0;
+        p.ourCart  += Number(r.cart_adds_asin)   || 0;
+        p.ourPurch += Number(r.purchases_asin)   || 0;
+        p.ourRev   += (Number(r.purchases_asin_price_median) || 0) * (Number(r.purchases_asin) || 0);
+      }
+    }
 
     // ── Aggregate by period ───────────────────────────────────────────────────
     type Agg = {
@@ -146,6 +206,39 @@ export async function POST(req: NextRequest) {
         ? fmtMonthLabel(p.dateKey)
         : fmtWeekLabel(p.dateKey, p.endDate, p.weekNum);
 
+      // ── SQP fields (if available for this period) ──────────────────────────
+      let sqpFields: Record<string, number | null> = {};
+      if (sqpByDate) {
+        const sqpD = sqpByDate.get(p.dateKey);
+        const sqpP = prev ? (sqpByDate.get(prev.dateKey) ?? null) : null;
+        if (sqpD) {
+          const impShare   = sqpD.mktImpr  > 0 ? (sqpD.ourImpr  / sqpD.mktImpr)  * 100 : 0;
+          const clkShare   = sqpD.mktClk   > 0 ? (sqpD.ourClk   / sqpD.mktClk)   * 100 : 0;
+          const cartShare  = sqpD.mktCart  > 0 ? (sqpD.ourCart  / sqpD.mktCart)  * 100 : 0;
+          const purchShare = sqpD.mktPurch > 0 ? (sqpD.ourPurch / sqpD.mktPurch) * 100 : 0;
+          const revShare   = sqpD.mktRev   > 0 ? (sqpD.ourRev   / sqpD.mktRev)   * 100 : 0;
+          const pImpShare   = sqpP && sqpP.mktImpr  > 0 ? (sqpP.ourImpr  / sqpP.mktImpr)  * 100 : 0;
+          const pClkShare   = sqpP && sqpP.mktClk   > 0 ? (sqpP.ourClk   / sqpP.mktClk)   * 100 : 0;
+          const pCartShare  = sqpP && sqpP.mktCart  > 0 ? (sqpP.ourCart  / sqpP.mktCart)  * 100 : 0;
+          const pPurchShare = sqpP && sqpP.mktPurch > 0 ? (sqpP.ourPurch / sqpP.mktPurch) * 100 : 0;
+          const pRevShare   = sqpP && sqpP.mktRev   > 0 ? (sqpP.ourRev   / sqpP.mktRev)   * 100 : 0;
+          sqpFields = {
+            searchVolume:         sqpD.sv,
+            searchVolumeDelta:    sqpP && sqpP.sv > 0 ? pctFn(sqpD.sv, sqpP.sv) : null,
+            impressionShare:      impShare,
+            impressionShareDelta: sqpP ? ppFn(impShare,   pImpShare)   : null,
+            clickShare:           clkShare,
+            clickShareDelta:      sqpP ? ppFn(clkShare,   pClkShare)   : null,
+            cartShare,
+            cartShareDelta:       sqpP ? ppFn(cartShare,  pCartShare)  : null,
+            purchaseShare:        purchShare,
+            purchaseShareDelta:   sqpP ? ppFn(purchShare, pPurchShare) : null,
+            revenueShare:         revShare,
+            revenueShareDelta:    sqpP ? ppFn(revShare,   pRevShare)   : null,
+          };
+        }
+      }
+
       return {
         dateKey: p.dateKey,
         label,
@@ -161,6 +254,7 @@ export async function POST(req: NextRequest) {
         salesDelta: prev ? pctFn(p.sales, prev.sales) : null,
         acosDelta:  prev ? ppFn(acos,  pacos)          : null,
         roasDelta:  prev ? ppFn(roas,  proas)          : null,
+        ...sqpFields,
       };
     });
 

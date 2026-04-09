@@ -40,7 +40,15 @@ type KpiRow = {
   spendDelta:number|null; salesDelta:number|null;
   acosDelta:number|null; roasDelta:number|null;
 };
-type ShowDataRow = KpiRow & { dateKey:string; label:string };
+type ShowDataRow = KpiRow & {
+  dateKey:string; label:string;
+  searchVolume?:number; searchVolumeDelta?:number|null;
+  impressionShare?:number; impressionShareDelta?:number|null;
+  clickShare?:number; clickShareDelta?:number|null;
+  cartShare?:number; cartShareDelta?:number|null;
+  purchaseShare?:number; purchaseShareDelta?:number|null;
+  revenueShare?:number; revenueShareDelta?:number|null;
+};
 
 // Family Distribution — 4 levels
 type CampKpiRow = KpiRow & { campaignName:string };
@@ -277,21 +285,67 @@ function SubtotalRow({ label, r, indent=28 }: { label:string; r:KpiRow; indent?:
   );
 }
 
-// ── SHOW DATA MODAL ────────────────────────────────────────────────────────────
+// ── RESIZABLE/DRAGGABLE SHOW DATA MODAL ──────────────────────────────────────
+type ResizeState = { active:boolean; dir:string; startX:number; startY:number; startW:number; startH:number; startL:number; startT:number } | null;
+
 function ShowDataModal({
   open, onClose, config, dateOptions, mode,
-  brands, families, adType,
-  startDate, endDate,
+  brands, families, adType, sqpOn, topMode,
 }: {
   open:boolean; onClose:()=>void; config:ShowDataConfig|null;
   dateOptions:DateOption[]; mode:string;
   brands:string[]; families:string[]; adType:AdType;
   startDate:string; endDate:string;
+  sqpOn:boolean; topMode:string;
 }) {
   const [sdStart,   setSdStart]   = useState('');
   const [sdEnd,     setSdEnd]     = useState('');
   const [sdData,    setSdData]    = useState<ShowDataRow[]>([]);
   const [sdLoading, setSdLoading] = useState(false);
+  const [dims, setDims]           = useState({w:0,h:560,l:0,t:0,ready:false});
+  const dimsRef   = useRef(dims);
+  const resizingRef = useRef<ResizeState>(null);
+  const modalRef  = useRef<HTMLDivElement>(null);
+  const minW      = useRef(0);
+
+  useEffect(() => { dimsRef.current = dims; }, [dims]);
+
+  useEffect(() => {
+    if (open && typeof window !== 'undefined') {
+      const w = Math.round(window.innerWidth * 0.88);
+      minW.current = Math.round(window.innerWidth * 0.42);
+      setDims({ w, h: 560, l: Math.round((window.innerWidth - w) / 2), t: Math.round((window.innerHeight - 560) / 2), ready: true });
+    }
+  }, [open]);
+
+  useEffect(() => {
+    const applyPos = (l:number,t:number,w:number,h:number) => {
+      const el = modalRef.current; if (!el) return;
+      el.style.left=`${l}px`; el.style.top=`${t}px`; el.style.width=`${w}px`; el.style.height=`${h}px`;
+    };
+    const onMove = (e:MouseEvent) => {
+      const r = resizingRef.current; if (!r?.active) return;
+      const dx=e.clientX-r.startX, dy=e.clientY-r.startY;
+      const MIN_W=minW.current, MIN_H=320;
+      let {w,h,l,t}={w:r.startW,h:r.startH,l:r.startL,t:r.startT};
+      if (r.dir==='drag'){l=r.startL+dx;t=r.startT+dy;}
+      else {
+        if (r.dir.includes('e')) w=Math.max(MIN_W,r.startW+dx);
+        if (r.dir.includes('s')) h=Math.max(MIN_H,r.startH+dy);
+        if (r.dir.includes('w')){const nw=Math.max(MIN_W,r.startW-dx);l=r.startL+(r.startW-nw);w=nw;}
+        if (r.dir.includes('n')){const nh=Math.max(MIN_H,r.startH-dy);t=r.startT+(r.startH-nh);h=nh;}
+      }
+      applyPos(l,t,w,h);
+    };
+    const onUp = () => {
+      const r = resizingRef.current; if (!r?.active) return;
+      resizingRef.current = {...r,active:false};
+      const el = modalRef.current;
+      if (el) setDims({w:parseFloat(el.style.width),h:parseFloat(el.style.height),l:parseFloat(el.style.left),t:parseFloat(el.style.top),ready:true});
+    };
+    document.addEventListener('mousemove',onMove); document.addEventListener('mouseup',onUp);
+    return ()=>{ document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp); };
+  }, []);
 
   // Default: last 10 date options
   useEffect(() => {
@@ -301,6 +355,8 @@ function ShowDataModal({
     setSdEnd(latest);
     setSdStart(oldest);
   }, [open, dateOptions]);
+
+  const showSqp = sqpOn && topMode === 'keywords' && !!config?.term;
 
   useEffect(() => {
     if (!open || !sdStart || !sdEnd || !config) return;
@@ -314,6 +370,7 @@ function ShowDataModal({
         matchType:    config.matchType,
         campaignName: config.campaignName,
         term:         config.term,
+        includeSqp:   showSqp,
       }),
     }).then(r=>r.json()).then(d=>{ setSdData(d.data??[]); setSdLoading(false); })
       .catch(()=>setSdLoading(false));
@@ -329,19 +386,50 @@ function ShowDataModal({
     document.addEventListener('keydown',h); return ()=>document.removeEventListener('keydown',h);
   }, [onClose]);
 
-  if (!open || !config) return null;
+  if (!open || !config || !dims.ready) return null;
+
+  const E = 6;
+  const edge = (extra:React.CSSProperties):React.CSSProperties => ({position:'absolute',zIndex:10,...extra});
+  const startResize = (e:React.MouseEvent,dir:string) => {
+    e.preventDefault(); e.stopPropagation();
+    const el = modalRef.current; if (!el) return;
+    resizingRef.current = {active:true,dir,startX:e.clientX,startY:e.clientY,
+      startW:parseFloat(el.style.width)||dims.w, startH:parseFloat(el.style.height)||dims.h,
+      startL:parseFloat(el.style.left)||dims.l,  startT:parseFloat(el.style.top)||dims.t};
+  };
+  const startDrag = (e:React.MouseEvent) => {
+    e.preventDefault();
+    const el = modalRef.current; if (!el) return;
+    resizingRef.current = {active:true,dir:'drag',startX:e.clientX,startY:e.clientY,
+      startW:parseFloat(el.style.width)||dims.w, startH:parseFloat(el.style.height)||dims.h,
+      startL:parseFloat(el.style.left)||dims.l,  startT:parseFloat(el.style.top)||dims.t};
+  };
 
   return (
-    <div style={{position:'fixed',inset:0,zIndex:50}}>
-      <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.75)'}} onClick={onClose}/>
-      <div style={{position:'absolute',left:'50%',top:'50%',transform:'translate(-50%,-50%)',
-        width:'90vw',maxWidth:1200,height:'75vh',background:'#1c1c1e',border:'1px solid #3f3f46',
-        borderRadius:14,boxShadow:'0 24px 60px rgba(0,0,0,0.6)',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+    <div style={{position:'fixed',inset:0,zIndex:50,pointerEvents:'none'}}>
+      <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.75)',pointerEvents:'auto'}} onClick={onClose}/>
+      <div ref={modalRef} style={{position:'absolute',background:'#1c1c1e',border:'1px solid #3f3f46',
+        borderRadius:14,boxShadow:'0 24px 60px rgba(0,0,0,0.6)',display:'flex',flexDirection:'column',
+        overflow:'hidden',pointerEvents:'auto',minWidth:minW.current,minHeight:320,
+        width:dims.w,height:dims.h,left:dims.l,top:dims.t}}>
 
-        {/* Header */}
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 22px',borderBottom:'1px solid #3f3f46',background:'#18181b',flexShrink:0}}>
-          <div style={{fontSize:14,fontWeight:800,color:'#fff'}}>{config.title} — Weekly Trend</div>
-          <button onClick={onClose} style={{width:28,height:28,background:'#27272a',border:'1px solid #3f3f46',borderRadius:6,color:'#a1a1aa',cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+        {/* Resize handles */}
+        <div style={edge({top:0,left:E,right:E,height:E,cursor:'n-resize'})}   onMouseDown={e=>startResize(e,'n')}/>
+        <div style={edge({bottom:0,left:E,right:E,height:E,cursor:'s-resize'})} onMouseDown={e=>startResize(e,'s')}/>
+        <div style={edge({left:0,top:E,bottom:E,width:E,cursor:'w-resize'})}   onMouseDown={e=>startResize(e,'w')}/>
+        <div style={edge({right:0,top:E,bottom:E,width:E,cursor:'e-resize'})}  onMouseDown={e=>startResize(e,'e')}/>
+        <div style={edge({top:0,left:0,width:E,height:E,cursor:'nw-resize'})}  onMouseDown={e=>startResize(e,'nw')}/>
+        <div style={edge({top:0,right:0,width:E,height:E,cursor:'ne-resize'})} onMouseDown={e=>startResize(e,'ne')}/>
+        <div style={edge({bottom:0,left:0,width:E,height:E,cursor:'sw-resize'})} onMouseDown={e=>startResize(e,'sw')}/>
+        <div style={edge({bottom:0,right:0,width:E,height:E,cursor:'se-resize'})} onMouseDown={e=>startResize(e,'se')}/>
+
+        {/* Draggable header */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 22px',
+          borderBottom:'1px solid #3f3f46',background:'#18181b',flexShrink:0,cursor:'move',userSelect:'none'}}
+          onMouseDown={startDrag}>
+          <div style={{fontSize:14,fontWeight:800,color:'#fff'}}>{config.title} — {mode==='weekly'?'Weekly':'Monthly'} Trend</div>
+          <button onClick={onClose} onMouseDown={e=>e.stopPropagation()}
+            style={{width:28,height:28,background:'#27272a',border:'1px solid #3f3f46',borderRadius:6,color:'#a1a1aa',cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
         </div>
 
         {/* Filters */}
@@ -380,6 +468,7 @@ function ShowDataModal({
                 <thead>
                   <tr>
                     <th style={{...THL,minWidth:220,color:'#e4e4e7',position:'sticky',top:0}}>{mode==='weekly'?'Week':'Month'}</th>
+                    {showSqp&&<th style={{...THSQPW,position:'sticky',top:0,borderLeft:'2px solid #1d4ed8'}}>Search Vol</th>}
                     <th style={{...THW,position:'sticky',top:0}}>Impressions</th>
                     <th style={{...THW,position:'sticky',top:0}}>Clicks</th>
                     <th style={{...THY,position:'sticky',top:0}}>CTR%</th>
@@ -390,6 +479,7 @@ function ShowDataModal({
                     <th style={{...THY,position:'sticky',top:0}}>Sales</th>
                     <th style={{...THY,position:'sticky',top:0}}>ACoS%</th>
                     <th style={{...THW,position:'sticky',top:0}}>ROAS</th>
+                    {showSqp&&<><th style={{...THSQP,position:'sticky',top:0}}>Impr. Share</th><th style={{...THSQP,position:'sticky',top:0}}>Click Share</th><th style={{...THSQP,position:'sticky',top:0}}>Cart Share</th><th style={{...THSQP,position:'sticky',top:0}}>Purch. Share</th><th style={{...THSQP,position:'sticky',top:0}}>Rev. Share</th></>}
                   </tr>
                 </thead>
                 <tbody>
@@ -398,6 +488,11 @@ function ShowDataModal({
                       <td style={{...TDL}}>
                         <div style={{fontSize:12,fontWeight:700,color:'#fff'}}>{row.label}</div>
                       </td>
+                      {showSqp&&(
+                        <td style={TDSQPF}>
+                          {row.searchVolume!=null?<KC main={fmtK(row.searchVolume)} wow={row.searchVolumeDelta??null}/>:<div style={{fontSize:10,color:'#52525b',textAlign:'center'}}>—</div>}
+                        </td>
+                      )}
                       <td style={TD}><KC main={fmtK(row.impressions)} wow={row.impDelta}/></td>
                       <td style={TD}><KC main={fmtK(row.clicks)}      wow={row.clkDelta}/></td>
                       <td style={TD}><KC main={fmtPct(row.ctr)}       wow={row.ctrDelta} yellow isPP/></td>
@@ -408,6 +503,15 @@ function ShowDataModal({
                       <td style={TD}><KC main={fmtCcy(row.sales)}     wow={row.salesDelta} yellow/></td>
                       <td style={TD}><KC main={fmtPct(row.acos)}      wow={row.acosDelta} yellow inv isPP/></td>
                       <td style={TD}><KC main={fmtX(row.roas)}        wow={row.roasDelta}/></td>
+                      {showSqp&&(
+                        <>
+                          <td style={TDSQP}>{row.impressionShare!=null?<KC main={`${row.impressionShare.toFixed(1)}%`} wow={row.impressionShareDelta??null} isPP/>:<div style={{fontSize:10,color:'#52525b',textAlign:'center'}}>—</div>}</td>
+                          <td style={TDSQP}>{row.clickShare!=null?<KC main={`${row.clickShare.toFixed(1)}%`} wow={row.clickShareDelta??null} isPP/>:<div style={{fontSize:10,color:'#52525b',textAlign:'center'}}>—</div>}</td>
+                          <td style={TDSQP}>{row.cartShare!=null?<KC main={`${row.cartShare.toFixed(1)}%`} wow={row.cartShareDelta??null} isPP/>:<div style={{fontSize:10,color:'#52525b',textAlign:'center'}}>—</div>}</td>
+                          <td style={TDSQP}>{row.purchaseShare!=null?<KC main={`${row.purchaseShare.toFixed(1)}%`} wow={row.purchaseShareDelta??null} isPP/>:<div style={{fontSize:10,color:'#52525b',textAlign:'center'}}>—</div>}</td>
+                          <td style={TDSQP}>{row.revenueShare!=null?<KC main={`${row.revenueShare.toFixed(1)}%`} wow={row.revenueShareDelta??null} isPP/>:<div style={{fontSize:10,color:'#52525b',textAlign:'center'}}>—</div>}</td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -434,7 +538,7 @@ export default function SearchTermAnalyzerPage() {
   const [endDate, setEndDate]        = useState('');
 
   // Global toggles (affect all sections)
-  const [adType,    setAdType]    = useState<AdType>('sp');
+  const [adType,    setAdType]    = useState<AdType>('both');
   const [brandMode, setBrandMode] = useState<BrandMode>('both');
 
   // Section 0 controls
@@ -493,6 +597,8 @@ export default function SearchTermAnalyzerPage() {
     if (d.dateOptions?.length) { if(m==='weekly') setWeekDates(d.dateOptions); else setMonthDates(d.dateOptions); }
     if (d.latestDate) { setStartDate(d.latestDate); setEndDate(d.latestDate); }
     if (d.allBrands?.length) setAllBrands(d.allBrands);
+    // Set families from ad data (consistent source) before setting brand/family
+    if (d.familiesForBrand?.length) setAllFamilies(d.familiesForBrand);
     if (d.topBrand)  setSelBrand(d.topBrand);
     if (d.topFamily) setSelFamily(d.topFamily);
   }, []);
@@ -505,10 +611,10 @@ export default function SearchTermAnalyzerPage() {
 
   useEffect(() => {
     if (!selBrand) return;
-    fetch(`/api/dashboard/filters?type=families&brands=${selBrand}`)
+    fetch(`/api/dashboard/search-term-analyzer?mode=${mode}&brand=${encodeURIComponent(selBrand)}`)
       .then(r=>r.json())
-      .then(d=>setAllFamilies((d.families??[]).map((f:{family_name:string})=>f.family_name)));
-  }, [selBrand]);
+      .then(d=>{ if (d.familiesForBrand) setAllFamilies(d.familiesForBrand); });
+  }, [selBrand, mode]);
 
   // ── Fetch MTA 1.0 ────────────────────────────────────────────────────────────
   const fetchMto1 = useCallback(async () => {
@@ -918,6 +1024,7 @@ export default function SearchTermAnalyzerPage() {
                   <th style={THY}>CPC</th><th style={THY}>Spend</th><th style={THY}>Sales</th>
                   <th style={THY}>ACoS%</th><th style={THW}>ROAS</th>
                   {sqpOn&&topMode==='keywords'&&(<><th style={THSQP}>Impr. Share</th><th style={THSQP}>Click Share</th><th style={THSQP}>Cart Share</th><th style={THSQP}>Purch. Share</th><th style={THSQP}>Rev. Share</th></>)}
+                  <th style={{...TH,minWidth:80}}>Trend</th>
                 </tr></thead>
                 <tbody>
                   {pagedRows.map((row,i)=>{
@@ -965,6 +1072,9 @@ export default function SearchTermAnalyzerPage() {
                             <td style={TDSQP}>{sqp?<KC main={`${sqp.revenueShare.toFixed(1)}%`}    wow={sqp.revenueShareDelta}    isPP/>:<div style={{fontSize:10,color:'#52525b',textAlign:'center'}}>—</div>}</td>
                           </>
                         )}
+                        <td style={{...TDC}} onClick={e=>e.stopPropagation()}>
+                          <SDB onClick={()=>openShowData({ title: row.term, term: row.term })}/>
+                        </td>
                       </tr>
                     );
                   })}
@@ -1168,6 +1278,7 @@ export default function SearchTermAnalyzerPage() {
         dateOptions={dateOptions} mode={mode}
         brands={selBrand?[selBrand]:[]} families={selFamily?[selFamily]:[]}
         adType={adType} startDate={startDate} endDate={endDate}
+        sqpOn={sqpOn} topMode={topMode}
       />
     </div>
   );
