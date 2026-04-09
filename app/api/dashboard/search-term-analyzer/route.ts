@@ -120,12 +120,13 @@ export async function GET(req: NextRequest) {
       ? `${dateField}, end_date`
       : `${dateField}, end_date, week_number`;
 
-    const [{ data: allDateRows }, { data: allBrandRows }] = await Promise.all([
-      supabase.from(table).select(selectFields).order(dateField, { ascending: false }).limit(2000),
-      supabase.from(table).select('brand_name').order('brand_name').limit(2000),
-    ]);
+    // Fetch dates + brand/family/spend data in parallel
+    // brandRows: high limit so all brands × families at latestDate are captured
+    // We first need latestDate from dates, so fetch dates first, then brandRows
+    const { data: allDateRows } = await supabase
+      .from(table).select(selectFields).order(dateField, { ascending: false }).limit(500000);
 
-    // Build date options with full formatted labels — deduplicate by start date
+    // Build date options — deduplicate by start date
     const seenDates = new Set<string>();
     const dateOptions: { value: string; label: string }[] = [];
 
@@ -145,32 +146,32 @@ export async function GET(req: NextRequest) {
 
     const latestDate = dateOptions[0]?.value ?? null;
     if (!latestDate) {
-      return NextResponse.json({ latestDate:null, dateOptions:[], topBrand:null, topFamily:null, allBrands:[] });
+      return NextResponse.json({ latestDate:null, dateOptions:[], topBrand:null, topFamily:null, allBrands:[], familiesForBrand:[] });
     }
 
-    const allBrands = [...new Set(
-      ((allBrandRows??[]) as {brand_name:string}[]).map(r=>r.brand_name)
-    )].filter(Boolean);
+    // Fetch brand/family/spend at latestDate — large limit to capture all brands
+    const { data: brandRows } = await supabase
+      .from(table).select('brand_name, family_name, spend').eq(dateField, latestDate).limit(100000);
 
-    // Top brand + top family in parallel
-    const [{ data: brandRows }, ] = await Promise.all([
-      supabase.from(table).select('brand_name, family_name, spend').eq(dateField, latestDate).limit(5000),
-    ]);
-
-    const brandSpend = new Map<string,number>();
+    const brandSpend      = new Map<string,number>();
     const famSpendPerBrand = new Map<string, Map<string,number>>();
     for (const r of ((brandRows??[]) as {brand_name:string;family_name:string;spend:number}[])) {
       const b = r.brand_name; const f = r.family_name; const s = Number(r.spend)||0;
+      if (!b) continue;
       brandSpend.set(b, (brandSpend.get(b)??0)+s);
       if (!famSpendPerBrand.has(b)) famSpendPerBrand.set(b, new Map());
       famSpendPerBrand.get(b)!.set(f, (famSpendPerBrand.get(b)!.get(f)??0)+s);
     }
+
+    // allBrands derived from brandRows — same source as topBrand, guaranteed consistent
+    const allBrands = [...brandSpend.keys()].filter(Boolean).sort();
+
     let topBrand='', topBS=-1;
     for (const [b,s] of brandSpend) if(s>topBS){topBS=s;topBrand=b;}
     let topFamily='', topFS=-1;
     for (const [f,s] of (famSpendPerBrand.get(topBrand)??new Map())) if(s>topFS){topFS=s;topFamily=f;}
 
-    // All families for topBrand — from ad data (consistent source)
+    // Families for topBrand — sorted list from ad data (used to populate family dropdown)
     const familiesForBrand = [...(famSpendPerBrand.get(topBrand)?.keys() ?? [])].filter(Boolean).sort();
 
     return NextResponse.json({ latestDate, dateOptions, topBrand, topFamily, allBrands, familiesForBrand });

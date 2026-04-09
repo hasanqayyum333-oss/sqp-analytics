@@ -590,30 +590,63 @@ export default function SearchTermAnalyzerPage() {
 
   const openShowData = (config: ShowDataConfig) => { setSdConfig(config); setSdOpen(true); };
 
+  // Guard: skip brand-change effect during initial default load
+  const initDoneRef = useRef(false);
+
   // ── On mount ─────────────────────────────────────────────────────────────────
   const loadDefaults = useCallback(async (m:'weekly'|'monthly') => {
     const r = await fetch(`/api/dashboard/search-term-analyzer?mode=${m}`);
     const d = await r.json();
-    if (d.dateOptions?.length) { if(m==='weekly') setWeekDates(d.dateOptions); else setMonthDates(d.dateOptions); }
-    if (d.latestDate) { setStartDate(d.latestDate); setEndDate(d.latestDate); }
+    if (d.dateOptions?.length) {
+      if (m==='weekly') setWeekDates(d.dateOptions); else setMonthDates(d.dateOptions);
+    }
+    // Set date range to latest single period
+    if (d.latestDate) { 
+      setStartDate(d.latestDate); 
+      setEndDate(d.latestDate); 
+    }
+
+    // Set brands list
     if (d.allBrands?.length) setAllBrands(d.allBrands);
-    // Set families from ad data (consistent source) before setting brand/family
+
+    // ✅ FIX 1: Auto-select top brand by spend
+    if (d.topBrand) setSelBrand(d.topBrand);
+
+    // ✅ FIX 2: Set families ONLY for the selected brand + auto-select top family by spend
     if (d.familiesForBrand?.length) setAllFamilies(d.familiesForBrand);
-    if (d.topBrand)  setSelBrand(d.topBrand);
     if (d.topFamily) setSelFamily(d.topFamily);
+       initDoneRef.current = true;
   }, []);
 
-  useEffect(() => { loadDefaults('weekly'); }, []);
-  useEffect(() => {
-    if (mode==='monthly'&&monthDates.length===0) loadDefaults('monthly');
-    else if (mode==='weekly'&&weekDates.length===0) loadDefaults('weekly');
-  }, [mode]);
+  useEffect(() => { loadDefaults('weekly'); }, [loadDefaults]);
 
+  // When mode changes: update date range; load dates for this mode if not yet loaded
   useEffect(() => {
-    if (!selBrand) return;
+    const dates = mode === 'weekly' ? weekDates : monthDates;
+    if (dates.length === 0) {
+      loadDefaults(mode);
+    } else {
+      // Reset to latest single period for this mode
+      setStartDate(dates[0]?.value ?? '');
+      setEndDate(dates[0]?.value ?? '');
+    }
+    // Clear stale results from previous mode
+    setRows([]); setSelectedTerm(null); setMto1Data(null); setFamilyData(null); setMtData(null); setSqpMap({});
+  }, [mode, weekDates, monthDates, loadDefaults]);
+
+  // When user manually changes brand — fetch families from ad data (consistent source)
+  useEffect(() => {
+    if (!selBrand || !initDoneRef.current) return;
     fetch(`/api/dashboard/search-term-analyzer?mode=${mode}&brand=${encodeURIComponent(selBrand)}`)
       .then(r=>r.json())
-      .then(d=>{ if (d.familiesForBrand) setAllFamilies(d.familiesForBrand); });
+      .then(d=>{
+        // Update families to show ONLY families belonging to this brand
+        if (d.familiesForBrand) setAllFamilies(d.familiesForBrand);
+
+        // Auto-select top family by spend within this brand
+        if (d.topFamily) setSelFamily(d.topFamily);
+        else setSelFamily(''); // Clear if no families found
+      });
   }, [selBrand, mode]);
 
   // ── Fetch MTA 1.0 ────────────────────────────────────────────────────────────
@@ -742,15 +775,15 @@ export default function SearchTermAnalyzerPage() {
     <div className="min-h-screen bg-zinc-900 text-white">
       {/* Header */}
       <div className="border-b border-zinc-700 px-8 py-5">
-        <h1 className="text-xl font-bold">Search Term Analyzer</h1>
-        <p className="text-sm text-zinc-400 mt-1">Ads performance · 100% ads data</p>
+        <h1 className="text-xl font-bold">Match Type Analysis</h1>
+        <p className="text-sm text-zinc-400 mt-1">Ads performance · Match type breakdown · 100% ads data</p>
       </div>
 
       {/* WoW / MoM tabs */}
       <div className="border-b border-zinc-700 px-8">
         <div className="flex">
           {(['weekly','monthly'] as const).map(m=>(
-            <button key={m} onClick={()=>{setMode(m);setRows([]);setSelectedTerm(null);setMto1Data(null);}}
+            <button key={m} onClick={()=>{ if(m!==mode) setMode(m); }}
               className={`py-4 px-6 text-sm font-semibold border-b-2 transition-colors ${mode===m?'border-orange-400 text-orange-400':'border-transparent text-zinc-400 hover:text-white'}`}>
               {m==='weekly'?'Week over Week':'Month over Month'}
             </button>
