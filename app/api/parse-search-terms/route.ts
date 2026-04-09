@@ -108,9 +108,10 @@ export async function POST(req: NextRequest) {
     const colMap = adType === 'SP' ? SP_COL_MAP : SB_COL_MAP;
 
     // Parse Excel file
-    const buffer = Buffer.from(await file.arrayBuffer());
+    const arrayBuffer = await file.arrayBuffer();
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (workbook.xlsx.load as unknown as (b: any) => Promise<void>)(Buffer.from(arrayBuffer));
 
     const worksheet = workbook.worksheets[0];
     if (!worksheet) {
