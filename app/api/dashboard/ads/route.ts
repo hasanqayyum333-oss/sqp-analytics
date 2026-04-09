@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     // Group by date key
     const dateMap = new Map<string, typeof rows>()
     for (const row of rows) {
-      const dk = row[dateCol] as string
+      const dk = (row as Record<string, unknown>)[dateCol] as string
       if (!dateMap.has(dk)) dateMap.set(dk, [])
       dateMap.get(dk)!.push(row)
     }
