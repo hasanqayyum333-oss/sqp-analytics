@@ -183,17 +183,52 @@ export default function SearchTermsUpload() {
 
   const handleUpload = async () => {
     if (!parsed) return;
-    setStatus({ stage: 'uploading', message: `Uploading ${parsed.count.toLocaleString()} rows...` });
 
-    const res = await fetch('/api/upload-search-terms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: parsed.rows, periodType }),
-    });
-    const data = await res.json();
+    const CHUNK = 500;
+    const total = parsed.rows.length;
+    const chunks: Record<string, unknown>[][] = [];
+    for (let i = 0; i < total; i += CHUNK) chunks.push(parsed.rows.slice(i, i + CHUNK));
 
-    if (!res.ok) { setStatus({ stage: 'error', message: data.error }); return; }
-    setStatus({ stage: 'done', inserted: data.inserted, skipped: data.skipped, errors: data.errors });
+    let totalInserted = 0;
+    let totalSkipped  = 0;
+    const allErrors: string[] = [];
+
+    for (let idx = 0; idx < chunks.length; idx++) {
+      setStatus({
+        stage: 'uploading',
+        message: `Uploading batch ${idx + 1} of ${chunks.length} (${Math.round(((idx) / chunks.length) * 100)}%)...`,
+      });
+
+      let lastErr: string | null = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const res = await fetch('/api/upload-search-terms', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows: chunks[idx], periodType }),
+          });
+          const data = await res.json();
+          if (!res.ok) { lastErr = data.error ?? `HTTP ${res.status}`; }
+          else {
+            totalInserted += data.inserted ?? 0;
+            totalSkipped  += data.skipped  ?? 0;
+            if (data.errors?.length) allErrors.push(...data.errors);
+            lastErr = null;
+            break;
+          }
+        } catch (e) {
+          lastErr = String(e);
+        }
+        if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1000));
+      }
+
+      if (lastErr) {
+        allErrors.push(`Batch ${idx + 1}: ${lastErr}`);
+        totalSkipped += chunks[idx].length;
+      }
+    }
+
+    setStatus({ stage: 'done', inserted: totalInserted, skipped: totalSkipped, errors: allErrors });
   };
 
   return (

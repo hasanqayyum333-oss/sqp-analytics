@@ -4,12 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { generateWeeks, generateMonths } from '../filter-context';
 import type { WeekOption, MonthOption } from '../filter-context';
 
-const ALL_WEEKS   = generateWeeks();
-const ALL_MONTHS  = generateMonths();
-const DEFAULT_END_WEEK    = ALL_WEEKS[0];
-const DEFAULT_START_WEEK  = ALL_WEEKS[Math.min(29, ALL_WEEKS.length - 1)];
-const DEFAULT_END_MONTH   = ALL_MONTHS[0];
-const DEFAULT_START_MONTH = ALL_MONTHS[Math.min(11, ALL_MONTHS.length - 1)];
+type DateOption = { value: string; label: string };
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type WeekRow = {
@@ -27,7 +22,6 @@ type AdsRow = {
   ctr: number; cvr: number; acos: number; roas: number; cpc: number;
 } | null;
 type Opt      = { value: string; label: string };
-type AsinOpt  = Opt & { family: string };
 type AdType   = 'both' | 'sp' | 'sb';
 type ViewMode = 'search_term' | 'keyword';
 
@@ -99,19 +93,60 @@ function MultiSel({ opts, value, onChange, placeholder, disabled, label }: { opt
   );
 }
 
-function KeywordSel({ opts, value, onChange, disabled }: { opts: string[]; value: string | null; onChange: (v: string | null) => void; disabled?: boolean }) {
-  const [open, setOpen] = useState(false); const [search, setSearch] = useState('');
+function KeywordSel({ trackedOpts, value, onChange, onInputChange, disabled }: { trackedOpts: string[]; value: string | null; onChange: (v: string | null) => void; onInputChange?: (v: string) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [inputText, setInputText] = useState('');
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setSearch(''); } }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
-  const filtered = opts.filter(k => k.toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
+  // Sync inputText when value is cleared externally (but don't overwrite while user is typing)
+  useEffect(() => { if (value === null) setInputText(''); }, [value]);
+  const suggestions = inputText.length > 0
+    ? trackedOpts.filter(k => k.toLowerCase().startsWith(inputText.toLowerCase()))
+    : trackedOpts;
   return (
     <div ref={ref} className="relative">
       <label className="block text-xs font-bold text-white mb-1 uppercase tracking-wide">Keyword</label>
-      <button onClick={() => !disabled && setOpen(o => !o)} disabled={disabled} className={`flex items-center gap-2 border rounded-lg px-3 py-2 text-sm min-w-[200px] ${disabled ? 'bg-zinc-900 border-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-zinc-800 border-zinc-700 text-white hover:border-zinc-500 cursor-pointer'}`}>
-        <span className={`flex-1 text-left truncate ${!value ? 'text-zinc-400' : ''}`}>{value ?? 'All tracked keywords'}</span>
-        <svg className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-      </button>
-      {open && (<div className="absolute z-50 w-80 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl"><div className="p-2 border-b border-zinc-700"><input autoFocus type="text" placeholder="Search keywords..." value={search} onChange={e => setSearch(e.target.value)} className="w-full bg-zinc-700 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white placeholder-zinc-500 outline-none focus:border-orange-400" /></div><div className="overflow-y-auto max-h-64"><div onClick={() => { onChange(null); setOpen(false); setSearch(''); }} className={`px-3 py-2 cursor-pointer hover:bg-zinc-700 text-sm italic ${!value ? 'text-orange-400 bg-orange-500/10' : 'text-zinc-400'}`}>All tracked keywords</div>{filtered.map(kw => (<div key={kw} onClick={() => { onChange(kw); setOpen(false); setSearch(''); }} className={`px-3 py-2 cursor-pointer hover:bg-zinc-700 text-sm ${value === kw ? 'text-orange-400 bg-orange-500/10' : 'text-zinc-200'}`}>{kw}</div>))}</div></div>)}
+      <div className={`flex items-center gap-1 border rounded-lg px-2 py-1.5 min-w-[220px] ${disabled ? 'bg-zinc-900 border-zinc-800' : 'bg-zinc-800 border-zinc-700 focus-within:border-orange-400'}`}>
+        <input
+          type="text"
+          disabled={disabled}
+          placeholder="All tracked keywords"
+          value={inputText}
+          onFocus={() => setOpen(true)}
+          onChange={e => { const v = e.target.value; setInputText(v); setOpen(true); onInputChange?.(v); if (v === '') onChange(null); }}
+          onKeyDown={e => { if (e.key === 'Enter') { const t = inputText.trim(); if (t) { onChange(t); setOpen(false); } } if (e.key === 'Escape') setOpen(false); }}
+          className="flex-1 bg-transparent text-sm text-white placeholder-zinc-400 outline-none"
+        />
+        {value !== null && (
+          <button onClick={() => { onChange(null); setInputText(''); onInputChange?.(''); }} className="text-zinc-500 hover:text-white text-sm shrink-0">✕</button>
+        )}
+      </div>
+      {open && !disabled && (
+        <div className="absolute z-50 w-80 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl">
+          <div className="overflow-y-auto max-h-64">
+            <div onClick={() => { onChange(null); setInputText(''); onInputChange?.(''); setOpen(false); }}
+              className={`px-3 py-2 cursor-pointer hover:bg-zinc-700 text-sm italic ${value === null ? 'text-orange-400 bg-orange-500/10' : 'text-zinc-400'}`}>
+              All tracked keywords
+            </div>
+            {suggestions.length > 0 && (
+              <div className="px-3 py-1 text-xs font-bold text-zinc-500 uppercase tracking-wider border-t border-zinc-700">Tracked Keywords</div>
+            )}
+            {suggestions.map(kw => (
+              <div key={kw} onClick={() => { onChange(kw); setInputText(kw); onInputChange?.(kw); setOpen(false); }}
+                className={`px-3 py-2 cursor-pointer hover:bg-zinc-700 text-sm ${value === kw ? 'text-orange-400 bg-orange-500/10' : 'text-zinc-200'}`}>{kw}</div>
+            ))}
+            {inputText.trim() && !trackedOpts.includes(inputText.trim()) && (
+              <>
+                <div className="px-3 py-1 text-xs font-bold text-zinc-500 uppercase tracking-wider border-t border-zinc-700">Custom</div>
+                <div onClick={() => { const t = inputText.trim(); onChange(t); onInputChange?.(t); setOpen(false); }}
+                  className="px-3 py-2 cursor-pointer hover:bg-zinc-700 text-sm text-zinc-200">
+                  Search: <span className="text-orange-400 font-bold">&quot;{inputText.trim()}&quot;</span>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -119,7 +154,8 @@ function KeywordSel({ opts, value, onChange, disabled }: { opts: string[]; value
 function WeekDropdown({ label, value, onChange, maxWeek }: { label: string; value: WeekOption; onChange: (w: WeekOption) => void; maxWeek?: WeekOption }) {
   const [open, setOpen] = useState(false); const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
-  const available = maxWeek ? ALL_WEEKS.filter(w => w.start >= maxWeek!.start) : ALL_WEEKS;
+  const allWeeks = generateWeeks();
+  const available = maxWeek ? allWeeks.filter(w => w.start >= maxWeek!.start) : allWeeks;
   return (
     <div ref={ref} className="relative">
       <div className="text-xs font-bold text-white mb-1">{label}</div>
@@ -135,7 +171,8 @@ function WeekDropdown({ label, value, onChange, maxWeek }: { label: string; valu
 function MonthDropdown({ label, value, onChange, maxMonth }: { label: string; value: MonthOption; onChange: (m: MonthOption) => void; maxMonth?: MonthOption }) {
   const [open, setOpen] = useState(false); const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
-  const available = maxMonth ? ALL_MONTHS.filter(m => m.start >= maxMonth!.start) : ALL_MONTHS;
+  const allMonths = generateMonths();
+  const available = maxMonth ? allMonths.filter(m => m.start >= maxMonth!.start) : allMonths;
   return (
     <div ref={ref} className="relative">
       <div className="text-xs font-bold text-white mb-1">{label}</div>
@@ -144,17 +181,6 @@ function MonthDropdown({ label, value, onChange, maxMonth }: { label: string; va
         <svg className={`w-3 h-3 text-zinc-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
       </button>
       {open && (<div className="absolute z-50 mt-1 w-full min-w-[180px] bg-zinc-700 border border-zinc-600 rounded shadow-xl overflow-hidden"><div className="overflow-y-auto max-h-52">{available.map(m => (<div key={m.start} onClick={() => { onChange(m); setOpen(false); }} className={`px-3 py-1.5 text-xs cursor-pointer ${m.start === value.start ? 'bg-orange-500 text-white' : 'text-zinc-200 hover:bg-zinc-600'}`}>{m.label}</div>))}</div></div>)}
-    </div>
-  );
-}
-
-function Toggle({ value, onChange, label }: { value: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs font-semibold text-zinc-300">{label}</span>
-      <button onClick={() => onChange(!value)} className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${value ? 'bg-orange-500' : 'bg-zinc-600'}`}>
-        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${value ? 'translate-x-4' : 'translate-x-1'}`} />
-      </button>
     </div>
   );
 }
@@ -232,8 +258,9 @@ interface AdsKpiSectionProps {
   brands: string[]; families: string[];
   viewMode: ViewMode; filterValue: string | null;
   mode: 'weekly' | 'monthly'; sectionLabel: string; adTypes: string[];
+  startDate?: string; endDate?: string;
 }
-function AdsKpiSection({ brands, families, viewMode, filterValue, mode, sectionLabel, adTypes }: AdsKpiSectionProps) {
+function AdsKpiSection({ brands, families, viewMode, filterValue, mode, sectionLabel, adTypes, startDate, endDate }: AdsKpiSectionProps) {
   const [curr, setCurr] = useState<AdsRow>(null);
   const [prev, setPrev] = useState<AdsRow>(null);
   const [loading, setLoading] = useState(false);
@@ -246,7 +273,7 @@ function AdsKpiSection({ brands, families, viewMode, filterValue, mode, sectionL
     try {
       const res = await fetch('/api/dashboard/ads', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brands, families, adTypes, viewMode, filterValue, mode }),
+        body: JSON.stringify({ brands, families, adTypes, viewMode, filterValue, mode, startDate, endDate }),
       });
       const d = await res.json();
       const nc = d.current ?? null; const np = d.previous ?? null;
@@ -254,7 +281,7 @@ function AdsKpiSection({ brands, families, viewMode, filterValue, mode, sectionL
       if (nc) { lastGoodCurr.current = nc; lastGoodPrev.current = np; }
     } catch { /* keep last good */ }
     finally { setLoading(false); }
-  }, [brands, families, adTypes, viewMode, filterValue, mode]);
+  }, [brands, families, adTypes, viewMode, filterValue, mode, startDate, endDate]);
 
   useEffect(() => { fetchAds(); }, [fetchAds]);
 
@@ -363,8 +390,14 @@ function DataModal({ brand, families, asins, keyword, onClose, mode }: {
   keyword: string | null; onClose: () => void; mode: 'weekly' | 'monthly';
 }) {
   const isMonthly = mode === 'monthly';
-  const [modalStart, setModalStart] = useState<WeekOption | MonthOption>(isMonthly ? DEFAULT_START_MONTH : DEFAULT_START_WEEK);
-  const [modalEnd,   setModalEnd]   = useState<WeekOption | MonthOption>(isMonthly ? DEFAULT_END_MONTH   : DEFAULT_END_WEEK);
+  const _allWeeks  = generateWeeks();
+  const _allMonths = generateMonths();
+  const _defStartWeek  = _allWeeks[Math.min(29, _allWeeks.length - 1)];
+  const _defEndWeek    = _allWeeks[0];
+  const _defStartMonth = _allMonths[Math.min(11, _allMonths.length - 1)];
+  const _defEndMonth   = _allMonths[0];
+  const [modalStart, setModalStart] = useState<WeekOption | MonthOption>(isMonthly ? _defStartMonth : _defStartWeek);
+  const [modalEnd,   setModalEnd]   = useState<WeekOption | MonthOption>(isMonthly ? _defEndMonth   : _defEndWeek);
   const [sqpData,    setSqpData]    = useState<WeekRow[]>([]);
   const [adsDataMap, setAdsDataMap] = useState<Map<string, AdsRow>>(new Map());
   const [loadingSqp, setLoadingSqp] = useState(false);
@@ -628,73 +661,65 @@ function DataModal({ brand, families, asins, keyword, onClose, mode }: {
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 export default function KeywordDeepDivePage() {
   const [mode, setMode] = useState<'weekly' | 'monthly'>('weekly');
-  const [brandOpts,  setBrandOpts]  = useState<Opt[]>([]);
-  const [familyOpts, setFamilyOpts] = useState<Opt[]>([]);
-  const [asinOpts,   setAsinOpts]   = useState<AsinOpt[]>([]);
-  const [kwOpts,     setKwOpts]     = useState<string[]>([]);
+  const [weekDates,   setWeekDates]   = useState<DateOption[]>([]);
+  const [monthDates,  setMonthDates]  = useState<DateOption[]>([]);
+  const [startDate,   setStartDate]   = useState('');
+  const [endDate,     setEndDate]     = useState('');
+  const [brandOpts,   setBrandOpts]   = useState<Opt[]>([]);
+  const [familyOpts,  setFamilyOpts]  = useState<Opt[]>([]);
+  const [kwOpts,      setKwOpts]      = useState<string[]>([]);
   const [selBrand,    setSelBrand]    = useState('');
   const [selFamilies, setSelFamilies] = useState<string[]>([]);
-  const [selAsins,    setSelAsins]    = useState<string[]>([]);
   const [selKeyword,  setSelKeyword]  = useState<string | null>(null);
+  const pendingKwRef = useRef<string>('');   // tracks whatever is typed in input right now
   const [data,      setData]      = useState<WeekRow[]>([]);
   const [loading,   setLoading]   = useState(false);
   const [status,    setStatus]    = useState<'idle'|'no-keywords'|'no-data'|'loaded'>('idle');
   const [showModal, setShowModal] = useState(false);
   const [adsViewMode, setAdsViewMode] = useState<ViewMode>('search_term');
-  const [mergeSB,     setMergeSB]     = useState(false);
-  const [sbExpanded,  setSbExpanded]  = useState(false);
-  const autoSelectDone = useRef(false);
+  const [adType, setAdType] = useState<AdType>('both');
   // ── ref to track the latest fetch so stale responses are discarded ──────────
   const fetchIdRef = useRef(0);
 
-  const autoSelectTopFamily = useCallback(async (brand: string) => {
-    try {
-      const res = await fetch(`/api/dashboard/filters?type=top-family&brand=${encodeURIComponent(brand)}`);
-      const d = await res.json();
-      if (d.family) setSelFamilies([d.family]);
-    } catch { /* silent */ }
+  const defaultsLoadingRef = useRef(false);
+
+  const loadDefaults = useCallback(async (m: 'weekly' | 'monthly', setFilters = false) => {
+    const r = await fetch(`/api/dashboard/search-term-analyzer?mode=${m}`);
+    const d = await r.json();
+    const dates: DateOption[] = d.dateOptions ?? [];
+    if (m === 'weekly') setWeekDates(dates); else setMonthDates(dates);
+    if (d.latestDate) { setStartDate(d.latestDate); setEndDate(d.latestDate); }
+    if (setFilters) {
+      defaultsLoadingRef.current = true;
+      const brands: Opt[] = (d.allBrands ?? []).map((b: string) => ({ value: b, label: b }));
+      setBrandOpts(brands);
+      if (d.familiesForBrand?.length) setFamilyOpts(d.familiesForBrand.map((f: string) => ({ value: f, label: f })));
+      if (d.topBrand)  setSelBrand(d.topBrand);
+      if (d.topFamily) setSelFamilies([d.topFamily]);
+      setTimeout(() => { defaultsLoadingRef.current = false; }, 300);
+    }
   }, []);
 
-  useEffect(() => {
-    fetch('/api/dashboard/filters?type=brands').then(r => r.json()).then(d => {
-      const opts = (d.brands ?? []).map((b: string) => ({ value: b, label: b }));
-      setBrandOpts(opts);
-      if (opts.length > 0 && !autoSelectDone.current) {
-        autoSelectDone.current = true;
-        const first = opts[0].value;
-        setSelBrand(first);
-        autoSelectTopFamily(first);
-      }
-    });
-  }, [autoSelectTopFamily]);
+  useEffect(() => { loadDefaults('weekly', true); }, []);
 
   useEffect(() => {
-    if (!selBrand) return;
-    fetch(`/api/dashboard/filters?type=families&brands=${selBrand}`).then(r => r.json()).then(d => {
-      const opts = (d.families ?? []).map((f: { family_name: string }) => ({ value: f.family_name, label: f.family_name }));
-      setFamilyOpts(opts);
-      setSelFamilies(prev => prev.filter(f => opts.some((o: Opt) => o.value === f)));
-    });
-  }, [selBrand]);
+    const dates = mode === 'weekly' ? weekDates : monthDates;
+    if (dates.length === 0) { loadDefaults(mode, false); return; }
+    setStartDate(dates[0]?.value ?? '');
+    setEndDate(dates[0]?.value ?? '');
+  }, [mode]);
 
   useEffect(() => {
-    const fq = selFamilies.length > 0 ? `&families=${selFamilies.join(',')}` : '';
-    const bq = selBrand ? `&brands=${selBrand}` : '';
-    if (!fq && !bq) { setAsinOpts([]); return; }
-    fetch(`/api/dashboard/filters?type=asins${fq}${bq}`).then(r => r.json()).then(d => {
-      const opts: AsinOpt[] = (d.asins ?? []).map((a: { child_asin: string; product_name?: string; family_name: string }) => ({ value: a.child_asin, label: a.product_name ? `${a.child_asin} — ${a.product_name}` : a.child_asin, family: a.family_name }));
-      setAsinOpts(opts);
-      setSelAsins(prev => prev.filter(a => opts.some((o: AsinOpt) => o.value === a)));
-    });
-  }, [selFamilies, selBrand]);
+    if (!selBrand || defaultsLoadingRef.current) return;
+    fetch(`/api/dashboard/search-term-analyzer?mode=${mode}&brand=${encodeURIComponent(selBrand)}`)
+      .then(r => r.json())
+      .then(d => { if (d.familiesForBrand) setFamilyOpts(d.familiesForBrand.map((f: string) => ({ value: f, label: f }))); });
+  }, [selBrand, mode]);
 
   const effectiveFamiliesStr = useMemo(() => {
-    let fams: string[];
-    if (selFamilies.length > 0)   fams = selFamilies;
-    else if (selAsins.length > 0) fams = [...new Set(asinOpts.filter(o => selAsins.includes(o.value)).map(o => o.family))];
-    else                           fams = familyOpts.map(f => f.value);
+    const fams = selFamilies.length > 0 ? selFamilies : familyOpts.map(f => f.value);
     return fams.sort().join(',');
-  }, [selFamilies, selAsins, asinOpts, familyOpts]);
+  }, [selFamilies, familyOpts]);
 
   useEffect(() => {
     if (!effectiveFamiliesStr) { setKwOpts([]); setSelKeyword(null); return; }
@@ -702,13 +727,16 @@ export default function KeywordDeepDivePage() {
   }, [effectiveFamiliesStr]);
 
   const handleBrandChange = useCallback((brand: string) => {
-    setSelBrand(brand); setSelFamilies([]); setSelAsins([]); setSelKeyword(null);
-    autoSelectTopFamily(brand);
-  }, [autoSelectTopFamily]);
+    setSelBrand(brand); setSelFamilies([]); setSelKeyword(null);
+  }, []);
 
   // ── fetchData with AbortController to prevent race conditions ───────────────
-  const fetchData = useCallback(async () => {
-    if (!selBrand && selFamilies.length === 0 && selAsins.length === 0) return;
+  const fetchData = useCallback(async (kwOverride?: string | null) => {
+    if (!selBrand && selFamilies.length === 0) return;
+
+    // kwOverride: explicit keyword passed by Apply (bypasses stale state)
+    // undefined means "use selKeyword from state"
+    const keyword = kwOverride !== undefined ? kwOverride : selKeyword;
 
     // Tag this fetch with an incrementing ID
     const myFetchId = ++fetchIdRef.current;
@@ -716,15 +744,13 @@ export default function KeywordDeepDivePage() {
 
     setLoading(true);
     try {
-      const startDate = mode === 'monthly' ? DEFAULT_START_MONTH.start : DEFAULT_START_WEEK.start;
-      const endDate   = mode === 'monthly' ? DEFAULT_END_MONTH.end     : DEFAULT_END_WEEK.end;
       const res = await fetch('/api/dashboard/funnel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           brands: selBrand ? [selBrand] : [],
-          families: selFamilies, asins: selAsins,
-          startDate, endDate, keyword: selKeyword, mode,
+          families: selFamilies, asins: [],
+          startDate, endDate, keyword, mode,
         }),
         signal: controller.signal,
       });
@@ -744,7 +770,7 @@ export default function KeywordDeepDivePage() {
     }
 
     return () => controller.abort();
-  }, [selBrand, selFamilies, selAsins, selKeyword, mode]);
+  }, [selBrand, selFamilies, selKeyword, mode, startDate, endDate]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -787,21 +813,44 @@ export default function KeywordDeepDivePage() {
         {/* Filter bar */}
         <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-4">
           <div className="flex flex-wrap items-end gap-4">
+            {/* Date selectors first */}
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-bold text-white uppercase tracking-wide">{mode === 'weekly' ? 'Start Week' : 'Start Month'}</label>
+              <select value={startDate} onChange={e => setStartDate(e.target.value)}
+                className="bg-zinc-700 border border-zinc-600 rounded px-3 py-2 text-xs text-white min-w-[220px] outline-none">
+                {(mode === 'weekly' ? weekDates : monthDates).map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-bold text-white uppercase tracking-wide">{mode === 'weekly' ? 'End Week' : 'End Month'}</label>
+              <select value={endDate} onChange={e => setEndDate(e.target.value)}
+                className="bg-zinc-700 border border-zinc-600 rounded px-3 py-2 text-xs text-white min-w-[220px] outline-none">
+                {(mode === 'weekly' ? weekDates : monthDates).map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
+            </div>
             <BrandSelect opts={brandOpts} value={selBrand} onChange={handleBrandChange} />
-            <MultiSel opts={familyOpts} value={selFamilies} label="Family" onChange={v => { setSelFamilies(v); setSelAsins([]); setSelKeyword(null); }} placeholder="Family" disabled={!selBrand} />
-            <MultiSel opts={asinOpts} value={selAsins} label="Child ASIN" onChange={v => { setSelAsins(v); setSelKeyword(null); }} placeholder="Child ASIN" disabled={selFamilies.length === 0} />
-            <KeywordSel opts={kwOpts} value={selKeyword} onChange={setSelKeyword} disabled={kwOpts.length === 0} />
-            {curr && (
-              <div className="flex items-center gap-2 px-3 py-2 bg-zinc-700 border border-zinc-600 rounded-lg self-end">
-                <span className="text-xs text-zinc-400">Latest</span>
-                <span className="text-xs font-bold text-white">{mode === 'monthly' ? `${curr.weekNumber}/${curr.year}` : `W${curr.weekNumber}/${curr.year}`}</span>
-              </div>
-            )}
+            <MultiSel opts={familyOpts} value={selFamilies} label="Family" onChange={v => { setSelFamilies(v); setSelKeyword(null); }} placeholder="Family" disabled={!selBrand} />
+            <KeywordSel
+              trackedOpts={kwOpts} value={selKeyword}
+              onChange={v => { setSelKeyword(v); pendingKwRef.current = v ?? ''; }}
+              onInputChange={v => { pendingKwRef.current = v; }}
+              disabled={!selBrand}
+            />
+            <button onClick={() => {
+              // Commit whatever is typed — even if user didn't press Enter
+              const typed = pendingKwRef.current.trim();
+              const kw = typed === '' ? null : typed;
+              setSelKeyword(kw);
+              fetchData(kw);
+            }} disabled={loading || !selBrand}
+              className="px-4 py-2 bg-orange-500 hover:bg-orange-400 disabled:opacity-50 text-white rounded text-sm font-bold self-end">
+              {loading ? 'Loading...' : 'Apply'}
+            </button>
           </div>
         </div>
 
         {/* ADS KPIs */}
-        <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-5 space-y-5">
+        <div className="bg-zinc-800 border border-zinc-700 rounded-lg p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm font-bold text-white tracking-widest uppercase">Ads KPIs</p>
             <div className="flex items-center gap-4 flex-wrap">
@@ -813,19 +862,24 @@ export default function KeywordDeepDivePage() {
                   </button>
                 ))}
               </div>
-              <Toggle value={mergeSB} onChange={v => { setMergeSB(v); if (v) setSbExpanded(false); }} label="Merge SB" />
+              {/* SP / SP+SB / SB toggle */}
+              <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-700 rounded-lg overflow-hidden">
+                {([['sp','SP Only'],['both','SP + SB'],['sb','SB Only']] as [AdType,string][]).map(([t,lbl]) => (
+                  <button key={t} onClick={() => setAdType(t)}
+                    className={`px-3 py-1.5 text-xs font-bold border-r border-zinc-700 last:border-0 transition-colors ${adType === t ? (t==='sp'?'bg-blue-900 text-blue-300':t==='sb'?'bg-purple-900 text-purple-300':'bg-zinc-600 text-white') : 'text-zinc-500 hover:text-white'}`}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-          <AdsKpiSection brands={selBrand ? [selBrand] : []} families={selFamilies} viewMode={adsViewMode} filterValue={selKeyword} mode={mode} sectionLabel={mergeSB ? 'SP + SB Combined' : 'SP'} adTypes={mergeSB ? ['SP','SB'] : ['SP']} />
-          {!mergeSB && (
-            <div className="border-t border-zinc-700 pt-4">
-              <button onClick={() => setSbExpanded(v => !v)} className="flex items-center gap-2 text-xs font-bold text-zinc-300 hover:text-white transition-colors">
-                <svg className={`w-4 h-4 transition-transform ${sbExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                {sbExpanded ? '− Collapse SB KPIs' : '+ Expand SB KPIs'}
-              </button>
-              {sbExpanded && <div className="mt-4"><AdsKpiSection brands={selBrand ? [selBrand] : []} families={selFamilies} viewMode={adsViewMode} filterValue={selKeyword} mode={mode} sectionLabel="SB" adTypes={['SB']} /></div>}
-            </div>
-          )}
+          <AdsKpiSection
+            brands={selBrand ? [selBrand] : []} families={selFamilies}
+            viewMode={adsViewMode} filterValue={selKeyword} mode={mode}
+            sectionLabel={adType === 'sp' ? 'SP Only' : adType === 'sb' ? 'SB Only' : 'SP + SB'}
+            adTypes={adType === 'both' ? ['SP','SB'] : adType === 'sp' ? ['SP'] : ['SB']}
+            startDate={startDate} endDate={endDate}
+          />
         </div>
 
         {/* SQP KPIs */}
@@ -847,7 +901,7 @@ export default function KeywordDeepDivePage() {
         </div>
       </div>
 
-      {showModal && <DataModal brand={selBrand} families={selFamilies} asins={selAsins} keyword={selKeyword} onClose={() => setShowModal(false)} mode={mode} />}
+      {showModal && <DataModal brand={selBrand} families={selFamilies} asins={[]} keyword={selKeyword} onClose={() => setShowModal(false)} mode={mode} />}
     </div>
   );
 }
