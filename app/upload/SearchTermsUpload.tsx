@@ -184,7 +184,7 @@ export default function SearchTermsUpload() {
   const handleUpload = async () => {
     if (!parsed) return;
 
-    const CHUNK = 500;
+    const CHUNK = 100;
     const total = parsed.rows.length;
     const chunks: Record<string, unknown>[][] = [];
     for (let i = 0; i < total; i += CHUNK) chunks.push(parsed.rows.slice(i, i + CHUNK));
